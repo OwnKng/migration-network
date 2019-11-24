@@ -1,0 +1,138 @@
+---
+title: "Internal Migration in the UK"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+
+```
+
+```{r}
+
+migration <- data.table::fread("Detailed_Estimates_2018_Dataset_1_2019_LA_boundaries.csv") %>% 
+  bind_rows(data.table::fread("Detailed_Estimates_2018_Dataset_2_2019_LA_boundaries.csv")) %>% 
+  janitor::clean_names() %>% 
+  # Counting total number of moves by age (including both genders) of both genders
+  group_by(out_la, in_la, age) %>% 
+  summarise(moves = sum(moves) %>% round(0)) %>% 
+  ungroup()
+
+migration
+
+```
+
+```{r}
+local_authority_codes <- 
+  read_csv("Local_Authority_District_to_Region_December_2018_Lookup_in_England.csv") %>% 
+  select("la_code" = 1, "la_name" = 2, "region" = 4)
+
+london_codes <- local_authority_codes %>% filter(region == "London")
+
+```
+
+```{r}
+
+migration <- migration %>% 
+  inner_join(local_authority_codes %>% select(la_code, la_name), by = c("in_la" = "la_code")) %>% 
+  select(-in_la) %>% 
+  rename("in_la" = la_name) %>% 
+  inner_join(local_authority_codes %>% select(la_code, la_name), by = c("out_la" = "la_code")) %>% 
+  select(-out_la) %>% 
+  rename("out_la" = la_name) %>% 
+  select(out_la, in_la, age, moves)
+
+
+```
+
+```{r}
+
+moves_to_london <- migration %>% 
+  filter(in_la %in% london_codes$la_name) %>% 
+  filter(!(out_la %in% london_codes$la_name)) %>% 
+  group_by(out_la, age) %>% 
+  summarise(moves = sum(moves)) %>% 
+  mutate(in_la = "London")
+
+moves_from_london <- migration %>% 
+  filter(out_la %in% london_codes$la_name) %>% 
+  filter(!(in_la %in% london_codes$la_name)) %>% 
+  group_by(in_la, age) %>% 
+  summarise(moves = sum(moves)) %>% 
+  mutate(out_la = "London")
+
+moves_london <- bind_rows(moves_to_london, moves_from_london)
+
+migration <- migration %>% 
+  filter(!(in_la %in% london_codes$la_name)) %>% 
+  filter(!(out_la %in% london_codes$la_name)) %>% 
+  bind_rows(moves_london)
+
+
+```
+
+```{r}
+
+big_cities <- c("London", "Manchester", "Bristol, City of", "Birmingham", "Leeds")
+
+big_cities_migration <- migration %>% 
+  filter(in_la %in% big_cities) %>% 
+  filter(out_la %in% big_cities) %>% 
+  filter(age %in% c(20:30)) %>% 
+  group_by(out_la, in_la) %>% 
+  summarise(moves = sum(moves)) %>% 
+  ungroup()
+
+```
+
+```{r}
+nodes <- big_cities_migration %>% 
+  select(out_la) %>% 
+  distinct() %>% 
+  rowid_to_column(var = "id") %>% 
+  rename("city" = out_la)
+
+edges <- big_cities_migration %>% 
+  left_join(nodes, by = c("out_la" = "city")) %>% 
+  rename("from" = id)
+
+edges <- edges %>% 
+  left_join(nodes, by = c("in_la" = "city")) %>% 
+  rename("to" = id)
+
+edges <- edges %>% select(from, to, moves)
+
+```
+
+```{r}
+library(ggraph)
+library(igraph)
+
+highschool
+
+graph_from_data_frame(highschool)
+
+edges <- edges %>% mutate(to_london = if_else(to == 4, TRUE, FALSE))
+
+migration_net <- graph_from_data_frame(d = edges, vertices = nodes, directed = TRUE)
+
+ggraph(migration_net) + 
+  geom_edge_link(aes(alpha = moves)) +
+  geom_node_text(aes(label = city))
+
+ggraph(migration_net, layout = 'linear') + 
+  geom_edge_arc(aes(alpha = moves, width = moves)) +
+  geom_node_text(aes(label = city))
+
+ggraph(migration_net, layout = 'graphopt') + 
+  geom_edge_link(aes(alpha = moves, width = moves)) + 
+  geom_node_point(size = 3) +
+  geom_node_text(aes(label = city))
+
+ggraph(migration_net, layout = 'linear', circular = TRUE) + 
+  geom_edge_arc(aes(alpha = moves, col = to_london, width = moves)) +
+  geom_node_point(size = 3) +
+  geom_node_text(aes(label = city)) + 
+  facet_wrap(~to_london)
+                 
+```
