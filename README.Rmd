@@ -136,3 +136,9 @@ ggraph(migration_net, layout = 'linear', circular = TRUE) +
   facet_wrap(~to_london)
                  
 ```
+
+```{r}
+
+
+
+```
