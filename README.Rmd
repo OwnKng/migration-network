@@ -8,6 +8,7 @@ library(tidyverse)
 
 ```
 
+### Reading in and preparing the data 
 ```{r}
 
 migration <- data.table::fread("Detailed_Estimates_2018_Dataset_1_2019_LA_boundaries.csv") %>% 
@@ -33,11 +34,24 @@ london_codes <- local_authority_codes %>% filter(region == "London")
 
 ```{r}
 
+towns_and_cities <- read_csv("lauth-classification-csv.csv") %>% 
+  filter(classification %in% c("Core City (London)", "Core City (outside London)", 
+                               "Other City", "Large Town")) %>% 
+  filter(percent_of_localauth > 0.7) %>% 
+  distinct(localauth_code, localauth_name) %>% 
+  rename("la_code" = localauth_code, "la_name" = localauth_name)
+
+```
+
+```{r}
+
 migration <- migration %>% 
   inner_join(local_authority_codes %>% select(la_code, la_name), by = c("in_la" = "la_code")) %>% 
+  semi_join(towns_and_cities, by = c("in_la" = "la_code")) %>% 
   select(-in_la) %>% 
   rename("in_la" = la_name) %>% 
   inner_join(local_authority_codes %>% select(la_code, la_name), by = c("out_la" = "la_code")) %>% 
+  semi_join(towns_and_cities, by = c("out_la" = "la_code")) %>% 
   select(-out_la) %>% 
   rename("out_la" = la_name) %>% 
   select(out_la, in_la, age, moves)
@@ -71,28 +85,21 @@ migration <- migration %>%
 
 ```
 
-```{r}
 
-big_cities <- c("London", "Manchester", "Bristol, City of", "Birmingham", "Leeds")
-
-big_cities_migration <- migration %>% 
-  filter(in_la %in% big_cities) %>% 
-  filter(out_la %in% big_cities) %>% 
-  filter(age %in% c(20:30)) %>% 
-  group_by(out_la, in_la) %>% 
-  summarise(moves = sum(moves)) %>% 
-  ungroup()
-
-```
+### Exploring Migration Between the England's urban areas 
 
 ```{r}
-nodes <- big_cities_migration %>% 
+nodes <- migration %>% 
   select(out_la) %>% 
   distinct() %>% 
   rowid_to_column(var = "id") %>% 
   rename("city" = out_la)
 
-edges <- big_cities_migration %>% 
+edges <- migration %>% 
+  group_by(out_la, in_la) %>% 
+  filter(age %in% c(20:40)) %>% 
+  summarise(moves = sum(moves)) %>% 
+  ungroup() %>% 
   left_join(nodes, by = c("out_la" = "city")) %>% 
   rename("from" = id)
 
@@ -102,43 +109,107 @@ edges <- edges %>%
 
 edges <- edges %>% select(from, to, moves)
 
+moves_total <- edges %>% 
+  group_by(to) %>% 
+  summarise(total_moves = sum(moves)) %>% 
+  ungroup()
+
+nodes <- nodes %>% 
+  left_join(moves_total, by = c("id" = "to"))
+
 ```
 
 ```{r}
 library(ggraph)
 library(igraph)
 
-highschool
+migration_net <- graph_from_data_frame(d = edges, vertices = nodes, directed = TRUE)
 
-graph_from_data_frame(highschool)
+ggraph(migration_net, layout = 'kk') +
+  geom_edge_link(aes(alpha = moves), show.legend = FALSE) + 
+  geom_node_point(aes(size = total_moves), show.legend = FALSE) +
+  scale_edge_width(range = c(0.2, 1)) 
 
-edges <- edges %>% mutate(to_london = if_else(to == 4, TRUE, FALSE))
+ggraph(migration_net, layout = 'linear', circular = TRUE) +
+  geom_edge_link(aes(alpha = moves, width = moves), show.legend = FALSE) + 
+  geom_node_point(aes(size = total_moves), show.legend = FALSE) +
+  geom_node_text(aes(label = city), alpha = 0.5) + 
+  scale_alpha_continuous(range = c(0.01, 0.5)) + 
+  scale_edge_width(range = c(0.2, 1)) 
+
+```
+
+
+```{r}
+
+ldn_id <- nodes[nodes$city == "London", ]$id
+
+edges <- edges %>% mutate(to_london = if_else(to == ldn_id, TRUE, FALSE))
 
 migration_net <- graph_from_data_frame(d = edges, vertices = nodes, directed = TRUE)
 
-ggraph(migration_net) + 
-  geom_edge_link(aes(alpha = moves)) +
-  geom_node_text(aes(label = city))
+ggraph(migration_net) +
+  geom_edge_link(aes(alpha = to_london, col = to_london, width = moves)) + 
+  geom_node_point(aes(size = total_moves)) +
+  geom_node_text(aes(label = city), alpha = 0.5, vjust = "top", hjust = "right") +
+  scale_edge_width(range = c(0.2, 1)) + 
+  scale_edge_alpha_discrete(range = c(0.1, 1)) + 
+  scale_edge_color_manual(values = c("FALSE" = "grey", "TRUE" = "black")) + 
+  theme(legend.position = "none")
 
-ggraph(migration_net, layout = 'linear') + 
-  geom_edge_arc(aes(alpha = moves, width = moves)) +
-  geom_node_text(aes(label = city))
+```
 
-ggraph(migration_net, layout = 'graphopt') + 
-  geom_edge_link(aes(alpha = moves, width = moves)) + 
-  geom_node_point(size = 3) +
-  geom_node_text(aes(label = city))
+### Where contributes young people to London? 
+```{r}
 
-ggraph(migration_net, layout = 'linear', circular = TRUE) + 
-  geom_edge_arc(aes(alpha = moves, col = to_london, width = moves)) +
-  geom_node_point(size = 3) +
-  geom_node_text(aes(label = city)) + 
-  facet_wrap(~to_london)
-                 
+migration_net_ldn <- graph_from_data_frame(d = edges %>% filter(to == ldn_id), vertices = nodes, directed = TRUE)
+
+ggraph(migration_net_ldn, layout = 'linear') +
+  geom_edge_arc(aes(alpha = moves, width = moves, col = moves), show.legend = FALSE) +
+  geom_node_point(aes(size = total_moves, color = total_moves), show.legend = FALSE, shape = 21) +
+  geom_node_text(aes(label = city), hjust = -0.1, angle = 90, alpha = 0.5) + 
+  scale_edge_width(range = c(0.2, 1)) +
+  scale_edge_color_viridis() + 
+  scale_fill_viridis() 
+
+```
+
+```{r}
+edges$to_london <- NULL
+
+migration_large <- graph_from_data_frame(d = edges %>% filter(moves > 100), vertices = nodes, directed = TRUE)
+
+ggraph(migration_large, layout = 'kk') +
+  geom_edge_link(aes(alpha = moves), show.legend = FALSE) + 
+  geom_node_point(aes(size = total_moves), show.legend = FALSE) +
+  scale_edge_width(range = c(0.2, 1)) +
+  geom_node_text(aes(label = city), alpha = 0.5) 
+
+ggraph(migration_large, layout = 'linear', circular = TRUE) +
+  geom_edge_link(aes(alpha = moves, width = moves), show.legend = FALSE) + 
+  geom_node_point(aes(size = total_moves), show.legend = FALSE) +
+  geom_node_text(aes(label = city), alpha = 0.5) + 
+  scale_alpha_continuous(range = c(0.01, 0.5)) + 
+  scale_edge_width(range = c(0.2, 1)) 
+
 ```
 
 ```{r}
 
+manchester_id <- nodes[nodes$city == "Manchester", ]$id
 
+edges <- edges %>% mutate(to_manchester = if_else(to == manchester_id, TRUE, FALSE))
+
+migration_large <- graph_from_data_frame(d = edges %>% filter(moves > 100), vertices = nodes, directed = TRUE)
+
+ggraph(migration_large, layout = 'linear', circular = TRUE) +
+  geom_edge_link(aes(alpha = to_manchester, width = moves, col = to_manchester), show.legend = FALSE) + 
+  geom_node_point(aes(size = total_moves), show.legend = FALSE) +
+  geom_node_text(aes(label = city), alpha = 0.5) + 
+  scale_edge_alpha_discrete(range = c(0.5, 1)) + 
+  scale_edge_width(range = c(0.2, 2)) + 
+  scale_edge_color_manual(values = c("TRUE" = "red", "FALSE" = "lightgrey"))
+
+```
 
 ```
