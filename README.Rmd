@@ -1,6 +1,6 @@
 ---
-title: "Internal Migration in the UK"
-output: html_document
+title: "Exploring Internal Migration in the UK using ggraph"
+output: github_document
 ---
 
 ```{r}
@@ -59,6 +59,8 @@ migration <- migration %>%
 
 ```
 
+### Unifying all the London Boroughs
+
 ```{r}
 
 moves_to_london <- migration %>% 
@@ -97,7 +99,7 @@ nodes <- migration %>%
 
 edges <- migration %>% 
   group_by(out_la, in_la) %>% 
-  filter(age %in% c(20:40)) %>% 
+  filter(age %in% c(23:30)) %>% 
   summarise(moves = sum(moves)) %>% 
   ungroup() %>% 
   left_join(nodes, by = c("out_la" = "city")) %>% 
@@ -115,7 +117,14 @@ moves_total <- edges %>%
   ungroup()
 
 nodes <- nodes %>% 
-  left_join(moves_total, by = c("id" = "to"))
+  left_join(moves_total, by = c("id" = "to")) %>% 
+  left_join(local_authority_codes %>% select(la_name, region), by = c("city" = "la_name")) 
+
+nodes[is.na(nodes$region),]$region <- "London"
+
+nodes <- nodes %>% 
+  arrange(region, id) %>% 
+  mutate(city = fct_inorder(city))
 
 ```
 
@@ -130,86 +139,172 @@ ggraph(migration_net, layout = 'kk') +
   geom_node_point(aes(size = total_moves), show.legend = FALSE) +
   scale_edge_width(range = c(0.2, 1)) 
 
-ggraph(migration_net, layout = 'linear', circular = TRUE) +
-  geom_edge_link(aes(alpha = moves, width = moves), show.legend = FALSE) + 
-  geom_node_point(aes(size = total_moves), show.legend = FALSE) +
-  geom_node_text(aes(label = city), alpha = 0.5) + 
-  scale_alpha_continuous(range = c(0.01, 0.5)) + 
-  scale_edge_width(range = c(0.2, 1)) 
-
 ```
 
+### Where contributes the most young people to London? 
 
 ```{r}
 
 ldn_id <- nodes[nodes$city == "London", ]$id
 
-edges <- edges %>% mutate(to_london = if_else(to == ldn_id, TRUE, FALSE))
-
-migration_net <- graph_from_data_frame(d = edges, vertices = nodes, directed = TRUE)
-
-ggraph(migration_net) +
-  geom_edge_link(aes(alpha = to_london, col = to_london, width = moves)) + 
-  geom_node_point(aes(size = total_moves)) +
-  geom_node_text(aes(label = city), alpha = 0.5, vjust = "top", hjust = "right") +
-  scale_edge_width(range = c(0.2, 1)) + 
-  scale_edge_alpha_discrete(range = c(0.1, 1)) + 
-  scale_edge_color_manual(values = c("FALSE" = "grey", "TRUE" = "black")) + 
-  theme(legend.position = "none")
-
-```
-
-### Where contributes young people to London? 
-```{r}
-
 migration_net_ldn <- graph_from_data_frame(d = edges %>% filter(to == ldn_id), vertices = nodes, directed = TRUE)
 
 ggraph(migration_net_ldn, layout = 'linear') +
   geom_edge_arc(aes(alpha = moves, width = moves, col = moves), show.legend = FALSE) +
-  geom_node_point(aes(size = total_moves, color = total_moves), show.legend = FALSE, shape = 21) +
+  geom_node_point(aes(size = total_moves), show.legend = FALSE, shape = 21) +
   geom_node_text(aes(label = city), hjust = -0.1, angle = 90, alpha = 0.5) + 
   scale_edge_width(range = c(0.2, 1)) +
   scale_edge_color_viridis() + 
-  scale_fill_viridis() 
+  scale_fill_viridis() +
+  theme_graph(border = FALSE)
 
 ```
 
-```{r}
-edges$to_london <- NULL
+```{r fig.width = 10, fig.height = 8}
 
-migration_large <- graph_from_data_frame(d = edges %>% filter(moves > 100), vertices = nodes, directed = TRUE)
+edges %>% 
+  filter(moves > 100) %>% 
+  mutate(london = if_else(to %in% ldn_id | from %in% ldn_id, TRUE, FALSE)) %>% 
+  graph_from_data_frame(vertices = nodes, directed = TRUE) %>% 
+  ggraph(layout = 'linear', circular = TRUE) +
+  geom_edge_fan(aes(alpha = moves, col = london, width = moves), arrow = arrow(length = unit(2, "mm")), 
+                end_cap = circle(4, "mm"), show.legend = FALSE) + 
+  geom_node_point(aes(size = total_moves), shape = 21, show.legend = FALSE, col = "skyblue") + 
+  geom_node_text(aes(label = city), alpha = 0.5, family = "Segoe UI Light") + 
+  scale_alpha_continuous(range = c(0.1, 0.5)) + 
+  scale_edge_width(range = c(0.2, 1)) + 
+  scale_edge_color_manual(values = c("TRUE" = "skyblue", "FALSE" = "lightgrey")) +
+  theme_graph(background = "white", base_family = "Segoe UI Light") + 
+  labs(title = "Sources of young person migration to London")
 
-ggraph(migration_large, layout = 'kk') +
-  geom_edge_link(aes(alpha = moves), show.legend = FALSE) + 
-  geom_node_point(aes(size = total_moves), show.legend = FALSE) +
+```
+
+# What about other big towns and cities? 
+
+```{r fig.width = 10, fig.height = 8}
+
+plot_migration <- function(city, color = "skyblue") {
+  
+  city_id <- nodes[nodes$city == city, ]$id
+  
+  nodes_city <- nodes %>% mutate(target_city = if_else(city_id == id, TRUE, FALSE))
+  
+  edges %>% 
+    filter(moves > 100) %>% 
+    mutate(city_to_from = if_else(to %in% city_id | from %in% city_id, TRUE, FALSE)) %>% 
+    graph_from_data_frame(vertices = nodes_city, directed = TRUE) %>% 
+    ggraph(layout = 'linear', circular = TRUE) +
+    geom_edge_fan(aes(col = city_to_from, alpha = city_to_from, width = moves), 
+                  arrow = arrow(length = unit(2, "mm")), 
+                  end_cap = circle(4, "mm"), show.legend = FALSE) + 
+    geom_node_point(aes(col = target_city), shape = 21, show.legend = FALSE) + 
+    geom_node_text(aes(label = city), alpha = 0.5, family = "Segoe UI Light") + 
+    scale_edge_width(range = c(0.2, 1)) + 
+    scale_edge_alpha_discrete(range = c(0.2, 1)) + 
+    scale_edge_color_manual(values = c("TRUE" = color, "FALSE" = "lightgrey")) +
+    scale_color_manual(values = c("TRUE" = color, "FALSE" = "lightgrey")) +
+    theme_graph(background = "white", base_family = "Segoe UI Light") + 
+    labs(title = paste0("Sources of young person migration to ", city))
+}
+
+plot_migration("Manchester", color = "red")
+plot_migration(city = "Birmingham", color = "#9A054A")
+plot_migration("Cambridge", color = "#ED700A")
+plot_migration("Bristol, City of", color = "#7874B5")
+
+
+```
+
+
+```{r, fig.width=12, fig.height=8}
+
+migration_net <- graph_from_data_frame(d = edges %>% filter(moves > 100), vertices = nodes, directed = TRUE)
+
+ggraph(migration_net, layout = 'kk') +
+  geom_edge_fan(aes(alpha = moves), arrow = arrow(length = unit(2, "mm")), 
+                end_cap = circle(4, "mm"), show.legend = FALSE) + 
+  geom_node_point(shape = 21) + 
   scale_edge_width(range = c(0.2, 1)) +
-  geom_node_text(aes(label = city), alpha = 0.5) 
-
-ggraph(migration_large, layout = 'linear', circular = TRUE) +
-  geom_edge_link(aes(alpha = moves, width = moves), show.legend = FALSE) + 
-  geom_node_point(aes(size = total_moves), show.legend = FALSE) +
-  geom_node_text(aes(label = city), alpha = 0.5) + 
-  scale_alpha_continuous(range = c(0.01, 0.5)) + 
-  scale_edge_width(range = c(0.2, 1)) 
+  geom_node_text(aes(label = city), alpha = 0.5, family = "Segoe UI Light") +
+  labs(title = "Migration of young people between England and Wales' largest towns and cities") +
+  theme_graph(border = FALSE, title_family = "Segoe UI Light")
 
 ```
+
+```{r, fig.width=12, fig.height=8}
+
+manchester_id <- nodes[nodes$city == "Manchester",]$id 
+
+edges %>% 
+  filter(moves > 100) %>% 
+  mutate(manchester = if_else(to %in% manchester_id | from %in% manchester_id, TRUE, FALSE)) %>% 
+  graph_from_data_frame(vertices = nodes, directed = TRUE) %>%  
+  ggraph(layout = 'kk') +
+  geom_edge_fan(aes(alpha = manchester, col = manchester, width = moves), 
+                arrow = arrow(length = unit(2, "mm")), 
+                end_cap = circle(4, "mm"), show.legend = FALSE) + 
+  geom_node_point(aes(col = city == "Manchester"), shape = 21, show.legend = FALSE) + 
+  geom_node_text(aes(label = city), alpha = 0.5, family = "Segoe UI Light") + 
+  scale_edge_alpha_discrete(range = c(0.2, 0.8)) + 
+  scale_edge_width(range = c(0.4, 1)) + 
+  scale_edge_color_manual(values = c("TRUE" = "red", "FALSE" = "lightgrey")) +
+  scale_color_manual(values = c("TRUE" = "red", "FALSE" = "lightgrey")) +
+  theme_graph(background = "white", base_family = "Segoe UI Light") + 
+  labs(title = "Migration flows of young persons to and from Manchester in 2018")
+
+```
+
 
 ```{r}
 
-manchester_id <- nodes[nodes$city == "Manchester", ]$id
+migration_intra_region <- migration %>% 
+  left_join(local_authority_codes %>% select("out_la" = la_name, "out_region" = region)) %>% 
+  left_join(local_authority_codes %>% select("in_la" = la_name, "in_region" = region)) %>% 
+  filter(!is.na(out_region)) %>% # Removes London
+  filter(out_region == in_region) %>% 
+  filter(age %in% c(23:30)) %>% 
+  group_by(out_la, in_la, out_region, in_region) %>% 
+  summarise(moves = sum(moves)) %>% 
+  ungroup() 
 
-edges <- edges %>% mutate(to_manchester = if_else(to == manchester_id, TRUE, FALSE))
+nodes <- migration_intra_region %>% 
+  select(out_la, out_region) %>% 
+  distinct() %>% 
+  rowid_to_column(var = "id") %>% 
+  rename("city" = out_la, "region" = out_region)
 
-migration_large <- graph_from_data_frame(d = edges %>% filter(moves > 100), vertices = nodes, directed = TRUE)
+edges <- migration_intra_region %>% 
+  left_join(nodes, by = c("out_la" = "city")) %>% 
+  rename("from" = id)
 
-ggraph(migration_large, layout = 'linear', circular = TRUE) +
-  geom_edge_link(aes(alpha = to_manchester, width = moves, col = to_manchester), show.legend = FALSE) + 
-  geom_node_point(aes(size = total_moves), show.legend = FALSE) +
-  geom_node_text(aes(label = city), alpha = 0.5) + 
-  scale_edge_alpha_discrete(range = c(0.5, 1)) + 
-  scale_edge_width(range = c(0.2, 2)) + 
-  scale_edge_color_manual(values = c("TRUE" = "red", "FALSE" = "lightgrey"))
+edges <- edges %>% 
+  left_join(nodes %>% rename("in_la" = city, "in_region" = region)) %>% 
+  rename("to" = id)
+
+edges <- edges %>% select(from, to, moves)
 
 ```
 
+```{r, fig.width = 14, fig.height = 12}
+
+migration_intra_region_network <- graph_from_data_frame(d = edges %>% filter(moves < 50), 
+                                                        vertices = nodes, directed = TRUE)
+
+ggraph(migration_intra_region_network, layout = 'kk') +
+  geom_edge_fan(aes(alpha = moves), 
+                arrow = arrow(length = unit(2, "mm")), 
+                end_cap = circle(2, "mm"), 
+                show.legend = FALSE) + 
+  geom_node_point(show.legend = FALSE) +
+  geom_node_text(aes(label = city)) + 
+  scale_edge_width(range = c(0.1, 2)) + 
+  facet_nodes(~region, scales = "free") + 
+  theme_graph(border = FALSE, title_family = "Segoe UI Light")
+
 ```
+
+
+
+
+
+
